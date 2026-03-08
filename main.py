@@ -12,7 +12,7 @@ from engine import get_recommendation
 # =========================
 # 设置页面背景图（使用本地图片）
 # =========================
-def set_background(image_filename: str = "background.jpg.jpg"):
+def set_background(image_filename: str = "background.jpg"):
     """
     使用本地图片作为整个应用的背景。
     注意：图片文件需要和 main.py 放在同一个文件夹下。
@@ -96,7 +96,7 @@ st.set_page_config(
 )
 
 # 先设置背景图，再渲染页面内容
-set_background("background.jpg.jpg")
+set_background("background.jpg")
 
 # 页面主标题
 st.title("工业过程监测 - AI 模型推荐工具")
@@ -227,3 +227,4 @@ else:
                 st.line_chart(history_df, use_container_width=True)
             else:
                 st.info("当前推荐结果中没有提供性能走势数据。")
+
