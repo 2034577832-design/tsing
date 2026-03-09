@@ -1,6 +1,7 @@
 import time
 import base64
 from pathlib import Path
+import io
 
 import pandas as pd
 import streamlit as st
@@ -82,6 +83,54 @@ def set_background(image_filename: str = "background.jpg"):
     div[data-testid="stFileUploadDropzone"] * {{
         color: #ffffff !important;
     }}
+
+    /* 统一调整错误提示（st.error）样式：深灰底白字，突出可读性 */
+    div[data-testid="stAlert"] {{
+        background-color: rgba(15, 23, 42, 0.95);
+        border: 1px solid rgba(248, 113, 113, 0.9);
+        border-radius: 10px;
+        color: #f9fafb;
+        box-shadow: 0 4px 10px rgba(0, 0, 0, 0.8);
+    }}
+
+    div[data-testid="stAlert"] * {{
+        color: #f9fafb !important;
+    }}
+
+    /* Streamlit 异常堆栈（Traceback）统一为深灰背景 + 亮色字体 */
+    div[data-testid="stException"] {{
+        background-color: rgba(15, 23, 42, 0.98);
+        border-radius: 10px;
+        border: 1px solid rgba(248, 113, 113, 0.9);
+        color: #e5e7eb;
+    }}
+
+    div[data-testid="stException"] pre {{
+        background-color: transparent;
+        color: #fbbf24;  /* 亮黄色代码文字 */
+        font-size: 0.9rem;
+        line-height: 1.5;
+    }}
+
+    /* 统一 info / success / warning 提示色系，保持深色科技风 */
+    .stApp div[data-baseweb="notification"] {{
+        border-radius: 10px;
+    }}
+
+    .stApp div[data-baseweb="notification"][kind="success"] {{
+        background-color: rgba(22, 163, 74, 0.9);  /* 深绿色 */
+        color: #f9fafb;
+    }}
+
+    .stApp div[data-baseweb="notification"][kind="warning"] {{
+        background-color: rgba(245, 158, 11, 0.9);  /* 橙色 */
+        color: #111827;
+    }}
+
+    .stApp div[data-baseweb="notification"][kind="info"] {{
+        background-color: rgba(59, 130, 246, 0.9);  /* 蓝色 */
+        color: #f9fafb;
+    }}
     </style>
     """
     st.markdown(css, unsafe_allow_html=True)
@@ -125,10 +174,36 @@ with st.sidebar:
 def load_csv_to_df(file) -> pd.DataFrame:
     """
     将上传的 CSV 文件读取为 Pandas DataFrame。
+    最稳健的 CSV 读取逻辑：
+    1. 先读取文件字节，识别 BOM（例如 UTF-16 常见的 0xFF 0xFE）
+    2. 优先使用 'utf-8-sig'，若 BOM 显示为 UTF-16 则改用 'utf-16'
+    3. 增加 'on_bad_lines' 参数跳过格式错误的行
     使用 cache_data 装饰器可以避免在每次交互时重复读取文件，提高性能。
     """
-    df = pd.read_csv(file)
-    return df
+    # Streamlit 上传文件是一个类文件对象，直接取 bytes 更稳定
+    raw = file.getvalue() if hasattr(file, "getvalue") else file.read()
+
+    # BOM 检测：UTF-16 LE/BE
+    preferred_enc = "utf-8-sig"
+    if isinstance(raw, (bytes, bytearray)) and len(raw) >= 2:
+        bom2 = bytes(raw[:2])
+        if bom2 in (b"\xff\xfe", b"\xfe\xff"):
+            preferred_enc = "utf-16"
+
+    # 先按优先编码读；若失败再回退常见编码（不使用任何 errors= 参数）
+    encodings = [preferred_enc, "utf-8-sig", "utf-16", "gbk", "latin1"]
+    last_err: Exception | None = None
+
+    for enc in encodings:
+        try:
+            return pd.read_csv(io.BytesIO(raw), encoding=enc, on_bad_lines="skip")
+        except UnicodeDecodeError as e:
+            last_err = e
+            continue
+
+    if last_err is not None:
+        raise last_err
+    raise ValueError("读取 CSV 失败：无法识别文件编码或文件不是标准 CSV 文本。")
 
 
 # =========================
@@ -152,35 +227,36 @@ if st.button("🚀 开始多智能体协同诊断"):
             st.subheader("数据预览")
             st.dataframe(data_df.head(), use_container_width=True)
 
-            # “思维链 / 调用链”状态展示
+            # “思维链 / 调用链”状态展示（为每个智能体使用带图标的 info 容器）
             with st.status("🤖 多智能体协同分析中...", expanded=True) as status:
-                st.write("🔍 **[数据智能体]** 正在提取时序特征……")
+                st.info("🔍 **数据智能体 (Data Agent)** 正在提取时序特征……")
                 data_feat = engine.process_data_agent(data_df)
 
-                st.write("🧠 **[语义智能体]** 正在解析用户意图与场景……")
+                st.info("🧠 **语义智能体 (Intent Agent)** 正在解析用户意图与场景……")
                 intent_feat = engine.process_intent_agent(user_intent)
 
-                st.write("🌐 **[搜索智能体]** 正在检索专家知识库与公网方案……")
+                st.info("🌐 **搜索智能体 (Search Agent)** 正在检索专家知识库与公网方案……")
                 model_list = engine.search_expert_agent()
 
-                st.write("⚖️ **[决策智能体]** 正在综合评估并生成最终报告……")
+                st.info("⚖️ **决策智能体 (Decision Agent)** 正在综合评估并生成最终报告……")
                 decision_result = engine.final_decision_agent(
                     data_feat, intent_feat, model_list
                 )
 
-                status.update(label="✅ 诊断完成！", state="complete", expanded=False)
+                status.update(label="✅ 多智能体协同诊断完成", state="complete", expanded=False)
 
             # =========================
-            # 结果展示：卡片 + 折线图
+            # 结果展示：结构化报告
             # =========================
-            st.success(f"### 推荐模型：{decision_result['final_model']}")
+            st.divider()
+            st.success(f"### 🎯 推荐模型：{decision_result['final_model']}")
 
-            # 专业化诊断报告（Markdown 渲染）
-            st.markdown("#### 📄 专家诊断报告")
+            st.divider()
+            st.markdown("### 📄 专家诊断报告")
             st.markdown(decision_result["report"])
 
-            # 将数据/意图/候选列表的“中间推理信息”也展示出来，增强可解释性
-            st.markdown("#### 🧩 中间推理要点")
+            st.divider()
+            st.markdown("### 🧩 中间推理要点")
             st.markdown(f"- **数据特征摘要：** {data_feat}")
             st.markdown(f"- **意图与场景理解：** {intent_feat}")
             st.markdown(f"- **候选模型集合：** {', '.join(model_list)}")
