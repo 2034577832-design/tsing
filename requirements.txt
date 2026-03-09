@@ -1,3 +1,6 @@
 streamlit
 pandas
 plotly
+langchain
+requests
+transformers
