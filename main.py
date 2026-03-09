@@ -5,8 +5,8 @@ from pathlib import Path
 import pandas as pd
 import streamlit as st
 
-# 直接从同目录下的 engine.py 导入 get_recommendation
-from engine import get_recommendation
+# 导入后端多智能体逻辑
+import engine
 
 
 # =========================
@@ -98,19 +98,27 @@ st.set_page_config(
 # 先设置背景图，再渲染页面内容
 set_background("background.jpg")
 
-# 页面主标题
+# 页面主标题（居中区域）
 st.title("工业过程监测 - AI 模型推荐工具")
-st.write("请上传工业过程的传感器数据（CSV），然后点击下方按钮执行 AI 诊断。")
+st.write("请上传工业时序数据，并用自然语言描述你的监测意图，系统将协同调用多智能体大模型完成诊断与推荐。")
 
 
 # =========================
-# 文件上传组件
+# 侧边栏：输入配置
 # =========================
-uploaded_file = st.file_uploader(
-    label="上传工业传感器数据（CSV 文件）",  # 组件标题
-    type=["csv"],  # 只允许 CSV
-    help="示例：包含时间戳、多个传感器读数等列。",  # 鼠标悬浮时的提示
-)
+with st.sidebar:
+    st.header("🛠️ 配置输入")
+    uploaded_file = st.file_uploader(
+        label="上传工业时序数据（CSV 文件）",
+        type=["csv"],
+        help="示例：包含时间戳、多个传感器读数等列。",
+    )
+
+    user_intent = st.text_area(
+        "描述您的监测意图",
+        placeholder="例如：我想在高频噪声环境下，对关键压力与温度的未来 30 分钟走势进行高精度预测，用于铝电解过程的精细控制……",
+        height=150,
+    )
 
 
 @st.cache_data
@@ -124,107 +132,60 @@ def load_csv_to_df(file) -> pd.DataFrame:
 
 
 # =========================
-# 执行诊断按钮 + 进度条
+# 执行诊断按钮 + 多智能体“思维链”展示
 # =========================
-if uploaded_file is None:
-    # 如果还没有上传文件，就给出提示信息
-    st.info("请先上传一个 CSV 文件，然后再点击『执行诊断』。")
-else:
-    # 读取 CSV 为 DataFrame
-    try:
-        data_df = load_csv_to_df(uploaded_file)
-    except Exception as e:
-        # 如果读取失败，在页面上显示错误信息
-        st.error(f"读取 CSV 文件失败，请检查格式是否正确。错误信息：{e}")
-        data_df = None
 
-    if data_df is not None:
-        st.subheader("数据预览")
-        # 显示前几行数据，方便你确认上传是否正确
-        st.dataframe(data_df.head(), use_container_width=True)
+st.markdown("### 🤖 多智能体大模型协同诊断")
+st.write("系统将依次调用：**数据智能体 → 语义智能体 → 搜索智能体 → 决策智能体**，生成最终的大模型推荐报告。")
 
-        # 创建一个按钮，用户点击后开始诊断
-        if st.button("执行诊断"):
-            # 创建进度条组件和一个文本占位
-            progress_bar = st.progress(0)
-            status_text = st.empty()
+if st.button("🚀 开始多智能体协同诊断"):
+    if uploaded_file and user_intent:
+        # 读取 CSV 为 DataFrame
+        try:
+            data_df = load_csv_to_df(uploaded_file)
+        except Exception as e:
+            st.error(f"读取 CSV 文件失败，请检查格式是否正确。错误信息：{e}")
+            data_df = None
 
-            # spinner：显示“正在计算...”的加载动画
-            with st.spinner("正在计算，请稍候..."):
-                # 这里的循环只是为了做出“进度条在动”的效果
-                for percent in range(0, 101, 20):
-                    status_text.text(f"正在计算... {percent}%")
-                    progress_bar.progress(percent)
-                    time.sleep(0.2)
+        if data_df is not None:
+            # 数据预览
+            st.subheader("数据预览")
+            st.dataframe(data_df.head(), use_container_width=True)
 
-                # 真正的推荐逻辑：调用你在 engine.py 中的 get_recommendation
-                # 这里把 data_df 传进去，便于你将来在函数里使用真实数据做计算
-                recommendation = get_recommendation(data_df)
+            # “思维链 / 调用链”状态展示
+            with st.status("🤖 多智能体协同分析中...", expanded=True) as status:
+                st.write("🔍 **[数据智能体]** 正在提取时序特征……")
+                data_feat = engine.process_data_agent(data_df)
 
-            # 计算结束后，清空进度条和状态文字
-            status_text.empty()
-            progress_bar.empty()
+                st.write("🧠 **[语义智能体]** 正在解析用户意图与场景……")
+                intent_feat = engine.process_intent_agent(user_intent)
+
+                st.write("🌐 **[搜索智能体]** 正在检索专家知识库与公网方案……")
+                model_list = engine.search_expert_agent()
+
+                st.write("⚖️ **[决策智能体]** 正在综合评估并生成最终报告……")
+                decision_result = engine.final_decision_agent(
+                    data_feat, intent_feat, model_list
+                )
+
+                status.update(label="✅ 诊断完成！", state="complete", expanded=False)
 
             # =========================
             # 结果展示：卡片 + 折线图
             # =========================
-            st.success("诊断完成！以下是推荐结果：")
+            st.success(f"### 推荐模型：{decision_result['final_model']}")
 
-            # 从返回的字典中取出需要展示的字段
-            model_name = recommendation.get("model_name", "未知模型")
-            suitability = recommendation.get("suitability", None)
-            reason = recommendation.get("reason", "暂无推荐理由")
-            suggested_params = recommendation.get("suggested_params", "暂无参数建议")
-            performance_score = recommendation.get("performance_score", [])
+            # 专业化诊断报告（Markdown 渲染）
+            st.markdown("#### 📄 专家诊断报告")
+            st.markdown(decision_result["report"])
 
-            # 适用度转成百分比显示
-            suitability_text = (
-                f"{(suitability * 100):.1f}%"
-                if isinstance(suitability, (int, float))
-                else "未知"
-            )
+            # 将数据/意图/候选列表的“中间推理信息”也展示出来，增强可解释性
+            st.markdown("#### 🧩 中间推理要点")
+            st.markdown(f"- **数据特征摘要：** {data_feat}")
+            st.markdown(f"- **意图与场景理解：** {intent_feat}")
+            st.markdown(f"- **候选模型集合：** {', '.join(model_list)}")
 
-            # 使用简单的 HTML + CSS 构造一个“卡片”样式（深色半透明背景 + 白色文字）
-            card_html = f"""
-            <div style="
-                background-color: rgba(0, 0, 0, 0.55);
-                border-radius: 12px;
-                padding: 20px 24px;
-                border: 1px solid rgba(255, 255, 255, 0.25);
-                box-shadow: 0 4px 12px rgba(0, 0, 0, 0.4);
-                margin-bottom: 16px;
-                backdrop-filter: blur(4px);
-            ">
-                <h3 style="margin: 0 0 12px 0; color: #ffffff;">推荐模型：{model_name}</h3>
-                <p style="margin: 4px 0; color: #ffffff;">
-                    <strong>推荐理由：</strong>{reason}
-                </p>
-                <p style="margin: 4px 0; color: #ffffff;">
-                    <strong>建议参数：</strong>{suggested_params}
-                </p>
-                <p style="margin: 4px 0; color: #ffffff;">
-                    <strong>适用度评分：</strong>{suitability_text}
-                </p>
-            </div>
-            """
-
-            # unsafe_allow_html=True 允许我们渲染上面的 HTML 代码
-            st.markdown(card_html, unsafe_allow_html=True)
-
-            # 折线图：展示模型性能走势
-            st.subheader("模型历史性能走势")
-
-            if isinstance(performance_score, (list, tuple)) and len(performance_score) > 0:
-                # 构造一个 DataFrame，方便 Streamlit 画图
-                history_df = pd.DataFrame(
-                    {
-                        "轮次": list(range(1, len(performance_score) + 1)),
-                        "性能评分": performance_score,
-                    }
-                ).set_index("轮次")
-
-                # 使用 line_chart 绘制折线图
-                st.line_chart(history_df, use_container_width=True)
-            else:
-                st.info("当前推荐结果中没有提供性能走势数据。")
-
+        else:
+            st.error("数据读取失败，无法继续诊断。")
+    else:
+        st.warning("请在左侧同时上传工业时序数据，并填写自然语言意图。")
